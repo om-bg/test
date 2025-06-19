@@ -112,6 +112,88 @@ def postprocess(output, original_shape, conf_threshold=0.25, iou_threshold=0.45)
     return final_detections
 
 
+# @app.get("/")
+# async def root():
+#     return {"message": "Host OK"}
+
+# @app.websocket("/ws")
+# async def websocket_endpoint(websocket: WebSocket):
+#     global latest_frame
+#     await websocket.accept()
+#     print("✅ WebSocket accepté !")
+#     while True:
+#         try:
+#             data = await websocket.receive_bytes()
+#             np_arr = np.frombuffer(data, np.uint8)
+#             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+#             if frame is None:
+#                 continue
+#             latest_frame = frame
+#         except Exception as e:
+#             print(f"❌ Erreur WebSocket : {e}")
+#             break
+
+# @app.get("/video_feed")
+# async def video_feed():
+#     boundary = "frame"
+
+#     async def generate():
+#         global latest_frame
+#         if session is None: # Si le modèle n'a pas pu être chargé
+#             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\nError: Model not loaded\r\n"
+#             return
+
+#         while True:
+#             await asyncio.sleep(0.05) # Contrôle le framerate de sortie
+#             if latest_frame is None:
+#                 continue
+
+#             try:
+#                 frame_to_process = latest_frame.copy()
+#                 original_h, original_w = frame_to_process.shape[:2]
+
+#                 # Pré-traitement de l'image
+#                 input_tensor = preprocess(frame_to_process)
+
+#                 # Inférence ONNX Runtime
+#                 outputs = session.run([output_name], {input_name: input_tensor})
+#                 output_data = outputs[0]
+
+#                 # Post-traitement pour obtenir les boîtes et les scores
+#                 detections = postprocess(output_data, frame_to_process.shape)
+
+#                 # Dessiner les détections sur l'image
+#                 for det in detections:
+#                     x1, y1, x2, y2, conf, cls_id = map(int, det[:6])
+#                     class_name = CLASS_NAMES[int(cls_id)]
+#                     label = f"{class_name} {conf:.2f}"
+
+#                     cv2.rectangle(frame_to_process, (x1, y1), (x2, y2), (0, 255, 0), 2)
+#                     cv2.putText(frame_to_process, label, (x1, max(y1 - 10, 0)),
+#                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+#                 # Encoder la trame traitée en JPEG
+#                 ret, jpeg = cv2.imencode(".jpg", frame_to_process, [int(cv2.IMWRITE_JPEG_QUALITY), 70]) # Qualité 70%
+#                 if not ret:
+#                     continue
+
+#                 frame_bytes = jpeg.tobytes()
+#                 yield (
+#                     f"--{boundary}\r\n"
+#                     "Content-Type: image/jpeg\r\n"
+#                     f"Content-Length: {len(frame_bytes)}\r\n\r\n"
+#                 ).encode() + frame_bytes + b"\r\n"
+
+#             except Exception as e:
+#                 print(f"❌ Erreur stream ou détection ONNX: {e}")
+#                 # En cas d'erreur, peut-être envoyer une image vide ou un message d'erreur
+#                 # Pour éviter de bloquer le générateur
+#                 await asyncio.sleep(1) # Attendre un peu avant de réessayer
+#                 continue
+
+#     headers = {"Content-Type": f"multipart/x-mixed-replace; boundary={boundary}"}
+#     return StreamingResponse(generate(), headers=headers)
+
 @app.get("/")
 async def root():
     return {"message": "Host OK"}
@@ -128,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket):
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if frame is None:
                 continue
-            latest_frame = frame
+            latest_frame = frame # Mise à jour directe du dernier frame reçu
         except Exception as e:
             print(f"❌ Erreur WebSocket : {e}")
             break
@@ -144,12 +226,20 @@ async def video_feed():
             return
 
         while True:
-            await asyncio.sleep(0.05) # Contrôle le framerate de sortie
+            # MODIFICATION IMPORTANTE : Réduire ou supprimer ce délai
+            # await asyncio.sleep(0.05) # ANCIEN : Introduisait un délai fixe de 50ms
+            await asyncio.sleep(0.001) # NOUVEAU : Réduire à une valeur minimale pour ne pas bloquer l'event loop
+                                     # Ou même supprimer cette ligne si vous voulez le maximum de débit possible.
+
             if latest_frame is None:
                 continue
 
             try:
-                frame_to_process = latest_frame.copy()
+                # IMPORTANT : Traitez le frame le plus récent.
+                # Si le traitement prend du temps, le `latest_frame` peut être mis à jour pendant ce temps.
+                # Pour éviter de traiter un frame déjà obsolète, vous pouvez copier la valeur de latest_frame ici.
+                frame_to_process = latest_frame.copy() # Gardez cette copie
+
                 original_h, original_w = frame_to_process.shape[:2]
 
                 # Pré-traitement de l'image
@@ -173,7 +263,8 @@ async def video_feed():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
                 # Encoder la trame traitée en JPEG
-                ret, jpeg = cv2.imencode(".jpg", frame_to_process, [int(cv2.IMWRITE_JPEG_QUALITY), 70]) # Qualité 70%
+                # MODIFICATION IMPORTANTE : Réduire la qualité JPEG de sortie
+                ret, jpeg = cv2.imencode(".jpg", frame_to_process, [int(cv2.IMWRITE_JPEG_QUALITY), 50]) # Qualité 50% (essayez 40 ou 30 si besoin)
                 if not ret:
                     continue
 
@@ -186,9 +277,7 @@ async def video_feed():
 
             except Exception as e:
                 print(f"❌ Erreur stream ou détection ONNX: {e}")
-                # En cas d'erreur, peut-être envoyer une image vide ou un message d'erreur
-                # Pour éviter de bloquer le générateur
-                await asyncio.sleep(1) # Attendre un peu avant de réessayer
+                await asyncio.sleep(1)
                 continue
 
     headers = {"Content-Type": f"multipart/x-mixed-replace; boundary={boundary}"}
